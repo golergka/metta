@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run
 
 import logging
-import time
 from typing import Dict, List, NamedTuple, Optional
 
 from app_backend.git_client import GitClient, GitCommit, GitError
@@ -56,7 +55,6 @@ class TrainingRunDescriptionGenerator:
         Raises:
             Various exceptions propagated from git/github operations
         """
-        start_time = time.time()
         commits = []
         file_stats = ""
         actual_diff = ""
@@ -88,8 +86,6 @@ class TrainingRunDescriptionGenerator:
 
             try:
                 result = self.llm_client.generate_text_with_messages(messages)
-                total_time = time.time() - start_time
-                logger.info(f"Description generation execution time: {total_time:.3f}s")
                 logger.debug(f"LLM generation successful, result length: {len(result)}")
                 return self._add_uncommitted_changes_disclaimer(result, commit_hash, has_uncommitted_changes)
             except Exception as e:
@@ -99,11 +95,6 @@ class TrainingRunDescriptionGenerator:
         # Fallback to formatted git logs
         logger.debug(f"Using git logs fallback for commit {commit_hash[:8]} (LLM not available)")
         result = self._build_git_summary(commits)
-        total_time = time.time() - start_time
-        logger.info(f"Description generation execution time: {total_time:.3f}s")
-
-        if total_time > 2.0:
-            logger.warning(f"SLOW DESCRIPTION_GEN ({total_time:.3f}s): {commit_hash[:8]}")
 
         return self._add_uncommitted_changes_disclaimer(result, commit_hash, has_uncommitted_changes)
 
@@ -132,14 +123,16 @@ class TrainingRunDescriptionGenerator:
             actual_diff = actual_diff[:MAX_DIFF_SIZE] + "\n... (diff truncated for brevity)"
             logger.debug(f"Actual diff truncated to {MAX_DIFF_SIZE} chars")
 
-        return f"""COMMIT HISTORY:
-{commit_history}
-
-FILE STATISTICS:
-{input_data.file_stats}
-
-CODE CHANGES:
-{actual_diff}"""
+        return (
+            "COMMIT HISTORY:\n"
+            f"{commit_history}\n"
+            "\n"
+            "FILE STATISTICS:\n"
+            f"{input_data.file_stats}\n"
+            "\n"
+            "CODE CHANGES:\n"
+            f"{actual_diff}"
+        )
 
     def _build_llm_messages(self, input_data: TrainingRunInput) -> List[Dict[str, str]]:
         """
@@ -151,6 +144,9 @@ CODE CHANGES:
         Returns:
             List of messages for conversation
         """
+        # Get few-shot examples
+        examples = TRAINING_EXAMPLES
+
         # System prompt with context and instructions
         system_prompt = (
             "You are tasked with creating concise, informative descriptions for machine learning training runs.\n\n"
@@ -170,9 +166,6 @@ CODE CHANGES:
             "using technical language appropriate for ML researchers."
         )
 
-        # Get few-shot examples
-        examples = self._get_training_examples()
-
         # Build messages
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -188,15 +181,6 @@ CODE CHANGES:
 
         return messages
 
-    def _get_training_examples(self) -> List[tuple[TrainingRunInput, str]]:
-        """
-        Get few-shot training examples with actual git data.
-
-        Returns:
-            List of (TrainingRunInput, expected_response) tuples
-        """
-        return TRAINING_EXAMPLES
-
     def _build_git_summary(self, commits: List[GitCommit]) -> str:
         """
         Build a git-based summary when LLM is not available.
@@ -206,9 +190,12 @@ CODE CHANGES:
 
         Returns:
             Formatted git summary string
+
+        Raises:
+            ValueError: If no commits are provided
         """
         if not commits:
-            return "No commits found in this training run."
+            raise ValueError("No commits found in this training run.")
 
         # Build commit history section
         commit_details = []
@@ -236,7 +223,7 @@ CODE CHANGES:
             Description with disclaimer prepended if needed
         """
         if has_uncommitted_changes:
-            disclaimer = f"COMMIT {commit_hash[:8]} CONTAINED UNCOMMITTED CHANGES\n\n"
+            disclaimer = f"WARNING: Training run {commit_hash[:8]} included uncommitted changes\n\n"
             return disclaimer + description
         return description
 
