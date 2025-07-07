@@ -214,6 +214,12 @@ Then, to see the results in the heatmap along with the other policies in the dat
 
 ## Development Setup
 
+Activate the virtual environment:
+
+```bash
+source .venv/bin/activate
+```
+
 To run the style checks and tests locally:
 
 ```bash
