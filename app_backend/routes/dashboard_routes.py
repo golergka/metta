@@ -421,6 +421,24 @@ def create_dashboard_router(metta_repo: MettaRepo) -> APIRouter:
     """Create a dashboard router with the given StatsRepo instance."""
     router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
+    # Create services once at router creation time
+    from app_backend import config
+
+    # Use a persistent HTTP client for the router lifetime
+    http_client = httpx.Client()
+    git_client = GitClient()
+    github_client = GitHubClient(http_client)
+    llm_client = LLMClient(
+        http_client,
+        openai_api_key=config.openai_api_key,
+        anthropic_api_key=config.anthropic_api_key,
+        openrouter_api_key=config.openrouter_api_key,
+        openai_api_base=config.openai_api_base,
+        openrouter_api_base=config.openrouter_api_base,
+        anthropic_api_url=config.anthropic_api_url,
+    )
+    description_generator = TrainingRunDescriptionGenerator(git_client, github_client, llm_client)
+
     # Create the user-or-token authentication dependency
     user_or_token = Depends(create_user_or_token_dependency(metta_repo))
 
@@ -764,25 +782,8 @@ def create_dashboard_router(metta_repo: MettaRepo) -> APIRouter:
         has_uncommitted_changes = attributes.get("has_uncommitted_changes", False)
 
         try:
-            # Create clients with dependency injection
-            from app_backend import config
-
-            with httpx.Client() as http_client:
-                git_client = GitClient()
-                github_client = GitHubClient(http_client)
-                llm_client = LLMClient(
-                    http_client,
-                    openai_api_key=config.openai_api_key,
-                    anthropic_api_key=config.anthropic_api_key,
-                    openrouter_api_key=config.openrouter_api_key,
-                    openai_api_base=config.openai_api_base,
-                    openrouter_api_base=config.openrouter_api_base,
-                    anthropic_api_url=config.anthropic_api_url,
-                )
-                description_generator = TrainingRunDescriptionGenerator(git_client, github_client, llm_client)
-
-                # Generate description
-                generated_description = description_generator.generate_description(git_hash, has_uncommitted_changes)
+            # Generate description using the pre-created service
+            generated_description = description_generator.generate_description(git_hash, has_uncommitted_changes)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
