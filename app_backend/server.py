@@ -7,6 +7,7 @@ import fastapi
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 
+from app_backend import config
 from app_backend.auth import user_from_header_or_token
 from app_backend.metta_repo import MettaRepo
 from app_backend.routes import dashboard_routes, sql_routes, stats_routes, token_routes
@@ -33,9 +34,7 @@ def setup_logging():
         return
 
     # Configure root logger
-    import os
-
-    log_level = logging.DEBUG if os.getenv("DEBUG") else logging.INFO
+    log_level = logging.DEBUG if config.debug else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
