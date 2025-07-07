@@ -99,8 +99,28 @@ class GitClient:
             logger.warning(f"Could not find merge base for {commit_hash}, using {base_branch}")
             return base_branch
 
+    def _parse_commit_line(self, line: str) -> GitCommit:
+        """Parse a single commit line in format 'hash|message|author|date'."""
+        parts = line.split("|", 3)
+        if len(parts) == 4:
+            hash_val, message, author, date = parts
+            return GitCommit(hash_val, message, author, date)
+        raise ValueError(f"Invalid commit line format: {line}")
+
     def get_commit_range(self, commit_hash: str, base_branch: str = DEFAULT_BRANCH) -> List[GitCommit]:
         """Get commits from merge base to specified commit."""
+        # Handle edge case where commit_hash equals base_branch
+        if commit_hash == base_branch:
+            # Return the single commit itself
+            try:
+                result = run_git("log", "--pretty=format:%H|%s|%an|%ad", "--date=short", "-1", commit_hash)
+                lines = result.strip().split("\n")
+                if lines and lines[0]:
+                    return [self._parse_commit_line(lines[0])]
+            except GitError:
+                pass
+            return []
+
         merge_base = self.get_merge_base(commit_hash, base_branch)
         commit_range = f"{merge_base}..{commit_hash}"
 
@@ -114,10 +134,11 @@ class GitClient:
             commits = []
             for line in result.strip().split("\n"):
                 if line:
-                    parts = line.split("|", 3)
-                    if len(parts) == 4:
-                        hash_val, message, author, date = parts
-                        commits.append(GitCommit(hash_val, message, author, date))
+                    try:
+                        commits.append(self._parse_commit_line(line))
+                    except ValueError:
+                        # Skip invalid lines
+                        continue
 
             return commits
 

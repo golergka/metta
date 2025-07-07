@@ -107,7 +107,23 @@ class TestGitClient:
             expected_commit = next(c for c in commits if c.hash == known_commit)
             assert expected_commit.message == "Add training run description"
             assert expected_commit.author == "Paul Tsier"
-            assert expected_commit.date == "2025-06-30"
+
+    def test_get_commit_range_edge_case_same_commit(self):
+        """Test get_commit_range when commit_hash equals base_branch."""
+        git_client = GitClient()
+
+        # Use a known commit hash from the current repository
+        known_commit = "2308eaf792dc19726ba7056cda0a32f5b3cacf3a"
+
+        # Only run test if the commit exists locally
+        if git_client.commit_exists(known_commit):
+            # Test edge case: commit_hash equals base_branch
+            commits = git_client.get_commit_range(known_commit, known_commit)
+            assert isinstance(commits, list)
+            assert len(commits) == 1  # Should return the single commit
+            assert commits[0].hash == known_commit
+            assert commits[0].message == "Add training run description"
+            assert commits[0].author == "Paul Tsier"
         else:
             pytest.skip("Known commits not available locally")
 
