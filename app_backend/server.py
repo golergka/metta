@@ -33,11 +33,17 @@ def setup_logging():
         return
 
     # Configure root logger
+    import os
+
+    log_level = logging.DEBUG if os.getenv("DEBUG") else logging.INFO
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
+    # Ensure root logger level is set (basicConfig may not always work if already configured)
+    logging.getLogger().setLevel(log_level)
 
     # Configure heatmap performance logger specifically
     heatmap_logger = logging.getLogger("dashboard_performance")

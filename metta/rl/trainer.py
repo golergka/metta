@@ -22,6 +22,7 @@ from metta.agent.policy_store import PolicyRecord, PolicyStore
 from metta.agent.util.debug import assert_shape
 from metta.common.memory_monitor import MemoryMonitor
 from metta.common.stopwatch import Stopwatch, with_instance_timer
+from metta.common.util.git import get_current_commit, has_unstaged_changes
 from metta.common.util.heartbeat import record_heartbeat
 from metta.common.util.system_monitor import SystemMonitor
 from metta.common.util.wandb.wandb_context import WandbRun
@@ -326,10 +327,36 @@ class MettaTrainer:
         trainer_cfg = self.trainer_cfg
 
         if self._stats_client is not None:
-            name = self.wandb_run.name if self.wandb_run is not None and self.wandb_run.name is not None else "unknown"
+            # Generate a unique name when WandB fails to avoid silent training run creation failures
+            # due to unique constraint violations on (user_id, name)
+            if self.wandb_run is not None and self.wandb_run.name is not None:
+                name = self.wandb_run.name
+            else:
+                # Use Hydra run parameter if available, otherwise generate unique name with timestamp
+                hydra_run = getattr(self.cfg, "run", None)
+                if hydra_run:
+                    name = str(hydra_run)
+                else:
+                    # Fallback to timestamp-based name to ensure uniqueness
+                    import time
+
+                    name = f"unknown_{int(time.time())}"
+                logger.warning(f"WandB run name not available, using fallback name: {name}")
+
             url = self.wandb_run.url if self.wandb_run is not None else None
+
+            # Get git information for training run attributes
+            attributes = {
+                "git_hash": get_current_commit(),
+                "has_uncommitted_changes": has_unstaged_changes(),
+            }
+
             try:
-                self._stats_run_id = self._stats_client.create_training_run(name=name, attributes={}, url=url).id
+                self._stats_run_id = self._stats_client.create_training_run(
+                    name=name, attributes=attributes, url=url
+                ).id
+                if attributes:
+                    logger.info(f"Training run created with git info: {attributes}")
             except Exception as e:
                 logger.warning(f"Failed to create training run: {e}")
 

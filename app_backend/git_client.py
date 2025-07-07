@@ -1,0 +1,162 @@
+#!/usr/bin/env -S uv run
+
+# NOTE: This file duplicates functionality with common/src/metta/common/util/git.py
+# Both files implement similar git operations but with different interfaces.
+# TODO: Extract common git functionality into a shared library to avoid duplication.
+
+import logging
+import subprocess
+from typing import List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class GitError(Exception):
+    """Custom exception for git-related errors."""
+
+
+def run_git(*args: str) -> str:
+    """Run a git command and return its output."""
+    try:
+        result = subprocess.run(["git", *args], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise GitError(f"Git command failed ({e.returncode}): {e.stderr.strip()}") from e
+    except FileNotFoundError as e:
+        raise GitError("Git is not installed!") from e
+
+
+def run_gh(*args: str) -> str:
+    """Run a GitHub CLI command and return its output."""
+    try:
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise GitError(f"GitHub CLI command failed ({e.returncode}): {e.stderr.strip()}") from e
+    except FileNotFoundError as e:
+        raise GitError("GitHub CLI (gh) is not installed!") from e
+
+
+class GitCommit:
+    """Represents a git commit with relevant information."""
+
+    def __init__(self, hash: str, message: str, author: str, date: str):
+        self.hash = hash
+        self.message = message
+        self.author = author
+        self.date = date
+
+    def __repr__(self) -> str:
+        return f"GitCommit(hash='{self.hash[:8]}', message='{self.message[:50]}...')"
+
+
+class GitClient:
+    """Client for git operations, mimicking the existing metta git utilities."""
+
+    DEFAULT_BRANCH = "main"
+
+    def get_current_commit(self) -> str:
+        """Get the current git commit hash."""
+        return run_git("rev-parse", "HEAD")
+
+    def get_current_branch(self) -> str:
+        """Get the current git branch name."""
+        try:
+            return run_git("symbolic-ref", "--short", "HEAD")
+        except GitError as e:
+            if "not a git repository" in str(e):
+                raise ValueError("Not in a git repository") from e
+            elif "HEAD is not a symbolic ref" in str(e):
+                return self.get_current_commit()
+            raise
+
+    def get_commit_message(self, commit_hash: str) -> str:
+        """Get the commit message for a given commit."""
+        return run_git("log", "-1", "--pretty=%B", commit_hash)
+
+    def validate_git_ref(self, ref: str) -> Optional[str]:
+        """Validate a git reference exists (locally or in remote)."""
+        try:
+            commit_hash = run_git("rev-parse", "--verify", ref)
+            return commit_hash
+        except GitError:
+            return None
+
+    def commit_exists(self, commit_hash: str) -> bool:
+        """Check if commit exists locally."""
+        try:
+            run_git("cat-file", "-e", commit_hash)
+            return True
+        except GitError:
+            return False
+
+    def get_merge_base(self, commit_hash: str, base_branch: str = DEFAULT_BRANCH) -> str:
+        """Get merge base between commit and base branch."""
+        try:
+            return run_git("merge-base", base_branch, commit_hash)
+        except GitError:
+            # Fallback to base branch
+            logger.warning(f"Could not find merge base for {commit_hash}, using {base_branch}")
+            return base_branch
+
+    def get_commit_range(self, commit_hash: str, base_branch: str = DEFAULT_BRANCH) -> List[GitCommit]:
+        """Get commits from merge base to specified commit."""
+        merge_base = self.get_merge_base(commit_hash, base_branch)
+        commit_range = f"{merge_base}..{commit_hash}"
+
+        try:
+            result = run_git("log", "--pretty=format:%H|%s|%an|%ad", "--date=short", "--reverse", commit_range)
+
+            if not result.strip():
+                # Single commit case
+                result = run_git("log", "--pretty=format:%H|%s|%an|%ad", "--date=short", "-n", "1", commit_hash)
+
+            commits = []
+            for line in result.strip().split("\n"):
+                if line:
+                    parts = line.split("|", 3)
+                    if len(parts) == 4:
+                        hash_val, message, author, date = parts
+                        commits.append(GitCommit(hash_val, message, author, date))
+
+            return commits
+
+        except GitError as e:
+            raise ValueError(f"Could not retrieve commit history: {str(e)}") from e
+
+    def get_range_diff_stats(self, commit_hash: str, base_branch: str = DEFAULT_BRANCH) -> str:
+        """Get the diff file statistics for the entire range from merge base to commit."""
+        merge_base = self.get_merge_base(commit_hash, base_branch)
+
+        try:
+            # Get the diff with file stats
+            result = run_git("diff", "--stat", f"{merge_base}..{commit_hash}")
+            return result
+        except GitError as e:
+            logger.warning(f"Could not get range diff stats: {str(e)}")
+            return ""
+
+    def get_range_diff(self, commit_hash: str, base_branch: str = DEFAULT_BRANCH) -> str:
+        """Get the actual diff content for the entire range from merge base to commit."""
+        merge_base = self.get_merge_base(commit_hash, base_branch)
+
+        try:
+            # Get the actual diff with + and - lines
+            result = run_git("diff", f"{merge_base}..{commit_hash}")
+            return result
+        except GitError as e:
+            logger.warning(f"Could not get range diff: {str(e)}")
+            return ""
+
+    def fetch_from_remote(self, commit_hash: Optional[str] = None) -> bool:
+        """Try to fetch from remote repository."""
+        try:
+            if commit_hash:
+                # Try fetching specific commit
+                run_git("fetch", "origin", commit_hash)
+            else:
+                # Fetch all refs
+                run_git("fetch", "origin")
+            return True
+        except GitError:
+            return False

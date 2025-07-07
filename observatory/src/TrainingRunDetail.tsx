@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import Plot from 'react-plotly.js'
-import { TrainingRun, HeatmapData, Repo } from './repo'
+import { TrainingRun, HeatmapData, Repo, TrainingRunAttributes } from './repo'
 import { MapViewer } from './MapViewer'
 import { SuiteTabs } from './SuiteTabs'
 import { GroupSelector, parseGroupMetric } from './GroupSelector'
@@ -63,7 +63,7 @@ const TRAINING_RUN_DETAIL_CSS = `
 
 .training-run-meta-item {
   display: flex;
-  align-items: center;
+  align-items: anchor-center;
   gap: 5px;
 }
 
@@ -162,6 +162,7 @@ const TRAINING_RUN_DETAIL_CSS = `
   font-style: italic;
   margin: 8px 0;
   line-height: 1.4;
+  white-space: pre-wrap;
 }
 
 .description-empty {
@@ -255,6 +256,183 @@ const getShortName = (evalName: string) => {
   return evalName.split('/').pop() || evalName
 }
 
+function AnimatedDots() {
+  const [dots, setDots] = useState('')
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDots(prev => {
+        if (prev === '...') return ''
+        return prev + '.'
+      })
+    }, 500)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  return <span>{dots}</span>
+}
+
+type DescriptionState = 'idle' | 'editing' | 'saving' | 'generating'
+
+interface TrainingRunDescriptionProps {
+  trainingRun: TrainingRun
+  currentUser: string | null
+  repo: Repo
+  onUpdate: (updatedRun: TrainingRun) => void
+  onError: (error: string) => void
+}
+
+function TrainingRunDescription({
+  trainingRun,
+  currentUser,
+  repo,
+  onUpdate,
+  onError
+}: TrainingRunDescriptionProps) {
+  const [state, setState] = useState<DescriptionState>('idle')
+  const [editDescription, setEditDescription] = useState('')
+  const [generationError, setGenerationError] = useState<string | null>(null)
+  const [generationErrorFlag, setGenerationErrorFlag] = useState<string | null>(null)
+
+  const canEditRun = currentUser && trainingRun.user_id === currentUser
+  const canGenerate = canEditRun && !trainingRun.description && trainingRun.attributes?.git_hash
+  const isDisabled = state !== 'idle'
+
+  const handleEditDescription = () => {
+    setState('editing')
+    setEditDescription(trainingRun.description || '')
+    setGenerationError(null)
+    setGenerationErrorFlag(null)
+  }
+
+  const handleSaveDescription = async () => {
+    try {
+      setState('saving')
+      const updatedRun = await repo.updateTrainingRunDescription(trainingRun.id, editDescription)
+      onUpdate(updatedRun)
+      setState('idle')
+      setEditDescription('')
+      setGenerationError(null)
+      setGenerationErrorFlag(null)
+    } catch (err: any) {
+      onError(`Failed to update description: ${err.message}`)
+      setState('editing') // Stay in editing mode on error
+    }
+  }
+
+  const handleCancelEdit = () => {
+    setState('idle')
+    setEditDescription('')
+    setGenerationError(null)
+    setGenerationErrorFlag(null)
+  }
+
+  const handleGenerateDescription = async () => {
+    try {
+      setState('generating')
+      setGenerationError(null)
+      setGenerationErrorFlag(null)
+      const updatedRun = await repo.generateTrainingRunDescription(trainingRun.id)
+      onUpdate(updatedRun)
+      setState('idle')
+      setGenerationErrorFlag(null)
+    } catch (err: any) {
+      console.error('Failed to generate description:', err)
+      const errorText = err.message || 'Internal error'
+      setGenerationError(`Failed to generate: ${errorText}`)
+      setGenerationErrorFlag(errorText)
+      setState('idle')
+    }
+  }
+
+  return (
+    <div className="training-run-description-section">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <strong>Description:</strong>
+
+        {canEditRun && state === 'idle' && (
+          <button
+            onClick={handleEditDescription}
+            className="edit-description-btn"
+          >
+            Edit
+          </button>
+        )}
+
+        {canGenerate && state === 'idle' && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              onClick={handleGenerateDescription}
+              className="edit-description-btn"
+            >
+              Generate
+            </button>
+            {generationErrorFlag && (
+              <span
+                style={{
+                  color: '#d32f2f',
+                  fontWeight: '500',
+                  fontSize: '12px',
+                  cursor: 'help'
+                }}
+                title={generationErrorFlag}
+              >
+                (error generating)
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+
+      {generationError && (
+        <div style={{ color: '#dc3545', fontSize: '12px', marginTop: '4px' }}>
+          {generationError}
+        </div>
+      )}
+
+      {state === 'editing' || state ==='saving' ? (
+        <div className="edit-description-form">
+          <textarea
+            value={editDescription}
+            onChange={(e) => setEditDescription(e.target.value)}
+            disabled={state === 'saving'}
+            className="edit-description-textarea"
+            placeholder="Enter a description for this training run..."
+          />
+          <div className="edit-description-actions">
+            <button
+              onClick={handleSaveDescription}
+              disabled={state === 'saving'}
+              className="save-btn"
+            >
+              {state === 'saving' ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              onClick={handleCancelEdit}
+              disabled={state === 'saving'}
+              className="cancel-btn"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : state === 'generating' ? (
+        <div className="description-display" style={{
+          color: '#666',
+          fontStyle: 'italic'
+        }}>
+          Generating<AnimatedDots />
+        </div>
+      ) : (
+        <div className={`description-display ${!trainingRun.description ? 'description-empty' : ''}`}>
+          {trainingRun.description || 'No description provided'}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function TrainingRunDetail({ repo }: TrainingRunDetailProps) {
   const { runId } = useParams<{ runId: string }>()
 
@@ -279,9 +457,6 @@ export function TrainingRunDetail({ repo }: TrainingRunDetailProps) {
     policyUri: string
     evalName: string
   } | null>(null)
-  const [editingDescription, setEditingDescription] = useState(false)
-  const [editDescription, setEditDescription] = useState('')
-  const [saving, setSaving] = useState(false)
   const [currentUser, setCurrentUser] = useState<string | null>(null)
 
 
@@ -394,37 +569,6 @@ export function TrainingRunDetail({ repo }: TrainingRunDetailProps) {
     return new Date(dateString).toLocaleString()
   }
 
-  const canEditRun = (run: TrainingRun) => {
-    return currentUser && run.user_id === currentUser
-  }
-
-  const handleEditDescription = () => {
-    if (trainingRun) {
-      setEditingDescription(true)
-      setEditDescription(trainingRun.description || '')
-    }
-  }
-
-  const handleSaveDescription = async () => {
-    if (!runId) return
-
-    try {
-      setSaving(true)
-      const updatedRun = await repo.updateTrainingRunDescription(runId, editDescription)
-      setTrainingRun(updatedRun)
-      setEditingDescription(false)
-      setEditDescription('')
-    } catch (err: any) {
-      setError(`Failed to update description: ${err.message}`)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleCancelEdit = () => {
-    setEditingDescription(false)
-    setEditDescription('')
-  }
 
   // Create the modified heatmap with policies on X-axis and evals on Y-axis
   const renderHeatmap = () => {
@@ -588,52 +732,46 @@ export function TrainingRunDetail({ repo }: TrainingRunDetailProps) {
               <span>User:</span>
               <span>{trainingRun.user_id}</span>
             </div>
-          </div>
-          
-          <div className="training-run-description-section">
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <strong>Description:</strong>
-              {canEditRun(trainingRun) && !editingDescription && (
-                <button
-                  onClick={handleEditDescription}
-                  className="edit-description-btn"
-                >
-                  Edit
-                </button>
-              )}
-            </div>
-            
-            {editingDescription ? (
-              <div className="edit-description-form">
-                <textarea
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  className="edit-description-textarea"
-                  placeholder="Enter a description for this training run..."
-                />
-                <div className="edit-description-actions">
-                  <button
-                    onClick={handleSaveDescription}
-                    disabled={saving}
-                    className="save-btn"
+            {trainingRun.attributes?.git_hash && (
+              <div className="training-run-meta-item">
+                <span>Git:</span>
+                <span>
+                  <a
+                    href={`https://github.com/Metta-AI/metta/commit/${trainingRun.attributes.git_hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      fontFamily: 'monospace',
+                      fontSize: '12px',
+                      color: '#007bff',
+                      textDecoration: 'none'
+                    }}
+                    onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                    onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
                   >
-                    Save
-                  </button>
-                  <button
-                    onClick={handleCancelEdit}
-                    disabled={saving}
-                    className="cancel-btn"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className={`description-display ${!trainingRun.description ? 'description-empty' : ''}`}>
-                {trainingRun.description || 'No description provided'}
+                    {trainingRun.attributes.git_hash.substring(0, 8)}
+                  </a>
+                  {trainingRun.attributes.has_uncommitted_changes && (
+                    <span style={{
+                      color: '#d32f2f',
+                      fontWeight: '500',
+                      marginLeft: '4px'
+                    }}>
+                      (dirty)
+                    </span>
+                  )}
+                </span>
               </div>
             )}
           </div>
+
+          <TrainingRunDescription
+            trainingRun={trainingRun}
+            currentUser={currentUser}
+            repo={repo}
+            onUpdate={setTrainingRun}
+            onError={setError}
+          />
         </div>
 
         <SuiteTabs
