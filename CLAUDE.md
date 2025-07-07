@@ -54,6 +54,20 @@ make clean
 make test
 ```
 
+### Git Operations
+
+When running git commands that trigger pre-commit hooks (like `git commit`), you need to activate the virtual environment first:
+
+```bash
+# For git commands that run pre-commit hooks
+source .venv/bin/activate && git commit -m "your commit message"
+
+# Alternative: use the venv's git directly
+.venv/bin/git commit -m "your commit message"
+```
+
+This is necessary because pre-commit hooks (like ruff formatting) are installed in the virtual environment.
+
 ## Code Architecture
 
 ### Agent System
